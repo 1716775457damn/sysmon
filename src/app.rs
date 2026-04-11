@@ -81,6 +81,8 @@ pub struct App {
     pub git_rx: Option<Receiver<GitMsg>>,
     pub git_tab: usize,
     pub git_selected: usize,
+    pub git_history: Vec<String>,
+    pub git_history_idx: Option<usize>, // None = editing current
 }
 
 #[derive(Clone)]
@@ -155,7 +157,9 @@ impl App {
             scan_done: 0,
             scan_open: 0,
             git_path: String::new(),
-            git_input_active: false,
+            git_input_active: true,
+            git_history: Vec::new(),
+            git_history_idx: None,
             git_stats: None,
             git_running: false,
             git_status: "输入 Git 仓库路径，按 Enter 开始分析".to_string(),
@@ -373,6 +377,39 @@ impl App {
 
     pub fn tick_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.tick_rate_ms)
+    }
+
+    /// Save current path to history (dedup, max 10)
+    pub fn git_history_push(&mut self) {
+        let p = self.git_path.trim().to_string();
+        if p.is_empty() { return; }
+        self.git_history.retain(|h| h != &p);
+        self.git_history.insert(0, p);
+        self.git_history.truncate(10);
+        self.git_history_idx = None;
+    }
+
+    pub fn git_history_up(&mut self) {
+        if self.git_history.is_empty() { return; }
+        let next = match self.git_history_idx {
+            None => 0,
+            Some(i) => (i + 1).min(self.git_history.len() - 1),
+        };
+        self.git_history_idx = Some(next);
+        self.git_path = self.git_history[next].clone();
+    }
+
+    pub fn git_history_down(&mut self) {
+        match self.git_history_idx {
+            None | Some(0) => {
+                self.git_history_idx = None;
+                self.git_path = String::new();
+            }
+            Some(i) => {
+                self.git_history_idx = Some(i - 1);
+                self.git_path = self.git_history[i - 1].clone();
+            }
+        }
     }
 
     /// Tab-complete git_path: find first matching subdirectory

@@ -685,15 +685,20 @@ fn draw_scanner(f: &mut Frame, app: &App, area: Rect) {
 fn draw_git(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),  // path input (full width)
+            Constraint::Length(3),  // sub-tabs + hints
+            Constraint::Length(3),  // status
+            Constraint::Min(0),
+        ])
         .split(area);
 
-    // ─ Path input + sub-tabs ─
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(chunks[0]);
-
+    // ─ Full-width path input ─
+    let hist_hint = if !app.git_history.is_empty() {
+        format!(" ↑↓历史({})  Tab补全  Enter分析  Esc退出输入", app.git_history.len())
+    } else {
+        " Tab补全  Enter分析  Esc退出输入".to_string()
+    };
     let path_text = if app.git_input_active {
         format!("{}_", app.git_path)
     } else {
@@ -704,26 +709,51 @@ fn draw_git(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(WHITE)
     };
+    let path_title = if app.git_input_active {
+        format!(" Git 仓库路径{} ", hist_hint)
+    } else {
+        " Git 仓库路径  (i 或 Enter 开始输入) ".to_string()
+    };
     f.render_widget(
         Paragraph::new(path_text)
             .block(Block::default().borders(Borders::ALL)
-                .title(" Git 仓库路径 (Enter 开始分析) ")
+                .title(path_title)
                 .border_style(path_style)),
-        top[0],
+        chunks[0],
     );
 
-    // Sub-tab selector
-    let sub_tabs = Tabs::new(vec![" 概览 ", " 作者 ", " 热点文件 ", " 提交热力图 "])
+    // ─ Sub-tabs + history list ─
+    let top2 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(chunks[1]);
+
+    let sub_tabs = Tabs::new(vec![" 概览(o) ", " 作者(a) ", " 热点文件(f) ", " 热力图(h) "])
         .select(app.git_tab)
-        .block(Block::default().borders(Borders::ALL).title(" 视图 (a/f/h) "))
+        .block(Block::default().borders(Borders::ALL).title(" 视图 "))
         .highlight_style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD))
         .divider("|");
-    f.render_widget(sub_tabs, top[1]);
+    f.render_widget(sub_tabs, top2[0]);
+
+    // Recent history quick-view
+    let hist_spans: Vec<Span> = std::iter::once(Span::styled(" 最近: ", Style::default().fg(GRAY)))
+        .chain(app.git_history.iter().take(3).enumerate().map(|(i, p)| {
+            let label = std::path::Path::new(p)
+                .file_name().and_then(|n| n.to_str()).unwrap_or(p);
+            let color = if app.git_history_idx == Some(i) { CYAN } else { YELLOW };
+            Span::styled(format!("[{}]{} ", i + 1, label.chars().take(12).collect::<String>()), Style::default().fg(color))
+        }))
+        .collect();
+    f.render_widget(
+        Paragraph::new(Line::from(hist_spans))
+            .block(Block::default().borders(Borders::ALL).title(" 历史路径 ")),
+        top2[1],
+    );
 
     // ─ Status / progress ─
     let prog_text = if app.git_progress.1 > 0 {
         let pct = app.git_progress.0 as f64 / app.git_progress.1 as f64;
-        let w = (chunks[1].width.saturating_sub(4)) as usize;
+        let w = (chunks[2].width.saturating_sub(4)) as usize;
         let filled = (pct * w as f64) as usize;
         format!(" [{}>{}] {}/{} ",
             "=".repeat(filled), " ".repeat(w.saturating_sub(filled)),
@@ -735,25 +765,25 @@ fn draw_git(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(&app.git_status, Style::default().fg(status_color)),
             Span::styled(prog_text, Style::default().fg(CYAN)),
         ])).block(Block::default().borders(Borders::ALL)),
-        chunks[1],
+        chunks[2],
     );
 
     // ─ Content area ─
     let Some(ref stats) = app.git_stats else {
         f.render_widget(
-            Paragraph::new(" 输入仓库路径后按 Enter 开始分析\n\n 支持格式: /path/to/repo  或  C:\\path\\to\\repo")
+            Paragraph::new(" 输入仓库路径后按 Enter 开始分析\n\n 支持格式: /path/to/repo  或  C:\\path\\to\\repo\n\n 提示: 切换到此页时自动进入输入模式，Tab 可补全目录")
                 .block(Block::default().borders(Borders::ALL).title(" 提示 "))
                 .style(Style::default().fg(GRAY)),
-            chunks[2],
+            chunks[3],
         );
         return;
     };
 
     match app.git_tab {
-        0 => draw_git_overview(f, stats, chunks[2]),
-        1 => draw_git_authors(f, stats, app.git_selected, chunks[2]),
-        2 => draw_git_hotfiles(f, stats, app.git_selected, chunks[2]),
-        3 => draw_git_heatmap(f, stats, chunks[2]),
+        0 => draw_git_overview(f, stats, chunks[3]),
+        1 => draw_git_authors(f, stats, app.git_selected, chunks[3]),
+        2 => draw_git_hotfiles(f, stats, app.git_selected, chunks[3]),
+        3 => draw_git_heatmap(f, stats, chunks[3]),
         _ => {}
     }
 }

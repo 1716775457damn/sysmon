@@ -59,12 +59,21 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     match key.code {
                         KeyCode::Esc   => { app.git_input_active = false; }
                         KeyCode::Tab   => { app.git_path_complete(); }
+                        KeyCode::Up    => { app.git_history_up(); }
+                        KeyCode::Down  => { app.git_history_down(); }
                         KeyCode::Enter => {
                             app.git_input_active = false;
+                            app.git_history_push();
                             start_git_analysis(&mut app);
                         }
-                        KeyCode::Backspace => { app.git_path.pop(); }
-                        KeyCode::Char(c)   => { app.git_path.push(c); }
+                        KeyCode::Backspace => {
+                            app.git_history_idx = None;
+                            app.git_path.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.git_history_idx = None;
+                            app.git_path.push(c);
+                        }
                         _ => {}
                     }
                     continue;
@@ -113,16 +122,22 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                     (KeyCode::Char('?'), _) => app.show_help = !app.show_help,
 
                     // Tab switching
-                    (KeyCode::Char('1'), _) => app.tab = 0,
-                    (KeyCode::Char('2'), _) => app.tab = 1,
-                    (KeyCode::Char('3'), _) => app.tab = 2,
-                    (KeyCode::Char('4'), _) => app.tab = 3,
-                    (KeyCode::Char('5'), _) => app.tab = 4,
-                    (KeyCode::Char('6'), _) => app.tab = 5,
-                    (KeyCode::Char('7'), _) => app.tab = 6,
-                    (KeyCode::Char('8'), _) => app.tab = 7,
-                    (KeyCode::Tab, _)     => app.tab = (app.tab + 1) % 8,
-                    (KeyCode::BackTab, _) => app.tab = (app.tab + 7) % 8,
+                    (KeyCode::Char('1'), _) => { app.tab = 0; }
+                    (KeyCode::Char('2'), _) => { app.tab = 1; }
+                    (KeyCode::Char('3'), _) => { app.tab = 2; }
+                    (KeyCode::Char('4'), _) => { app.tab = 3; }
+                    (KeyCode::Char('5'), _) => { app.tab = 4; }
+                    (KeyCode::Char('6'), _) => { app.tab = 5; }
+                    (KeyCode::Char('7'), _) => { app.tab = 6; }
+                    (KeyCode::Char('8'), _) => { app.tab = 7; app.git_input_active = true; }
+                    (KeyCode::Tab, _) => {
+                        app.tab = (app.tab + 1) % 8;
+                        if app.tab == 7 { app.git_input_active = true; }
+                    }
+                    (KeyCode::BackTab, _) => {
+                        app.tab = (app.tab + 7) % 8;
+                        if app.tab == 7 { app.git_input_active = true; }
+                    }
 
                     // Tick rate
                     (KeyCode::Char('+'), _) | (KeyCode::Char('='), _) => {
@@ -157,9 +172,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                             app.git_input_active = true;
                         }
                     }
-                    (KeyCode::Char('i'), _) if app.tab == 7 => {
-                        app.git_input_active = true;
-                    }
+                    (KeyCode::Char('i'), _) if app.tab == 7 => { app.git_input_active = true; }
                     // Git sub-tab switching
                     (KeyCode::Char('a'), _) if app.tab == 7 => app.git_tab = 1,
                     (KeyCode::Char('f'), _) if app.tab == 7 => app.git_tab = 2,
