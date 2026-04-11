@@ -108,63 +108,64 @@ pub fn start_scan(
     tx: Sender<ScanMsg>,
 ) {
     std::thread::spawn(move || {
-        use std::sync::{Arc, Mutex};
+        use std::sync::mpsc as task_mpsc;
 
         let start = Instant::now();
         let total = hosts.len() * ports.len();
-        let open_count = Arc::new(Mutex::new(0usize));
 
-        // Build work queue
-        let work: Vec<(String, u16)> = hosts.iter()
-            .flat_map(|h| ports.iter().map(move |&p| (h.clone(), p)))
-            .collect();
+        // Use a channel as a lock-free work queue
+        let (task_tx, task_rx) = task_mpsc::channel::<(String, u16)>();
+        let task_rx = std::sync::Arc::new(std::sync::Mutex::new(task_rx));
 
-        let work = Arc::new(Mutex::new(work.into_iter()));
+        // Feed all tasks upfront
+        for h in &hosts {
+            for &p in &ports {
+                let _ = task_tx.send((h.clone(), p));
+            }
+        }
+        drop(task_tx); // signal end-of-work
+
+        let open_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let timeout = Duration::from_millis(timeout_ms);
+        let mut handles = Vec::with_capacity(concurrency);
 
-        let mut handles = Vec::new();
         for _ in 0..concurrency {
-            let work = work.clone();
+            let task_rx = task_rx.clone();
             let tx = tx.clone();
             let open_count = open_count.clone();
 
             handles.push(std::thread::spawn(move || {
                 loop {
-                    let item = { work.lock().unwrap().next() };
+                    let item = { task_rx.lock().unwrap().recv().ok() };
                     let (host, port) = match item { Some(x) => x, None => break };
 
-                    let addr = format!("{}:{}", host, port);
                     let t0 = Instant::now();
-                    let open = SocketAddr::new(
-                        addr.parse::<SocketAddr>()
-                            .map(|a| a.ip())
-                            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-                        port,
-                    );
-                    let connected = TcpStream::connect_timeout(&open, timeout).is_ok();
+                    // Parse directly as SocketAddr — avoids the LOCALHOST fallback bug
+                    let addr: SocketAddr = format!("{}:{}", host, port)
+                        .parse()
+                        .unwrap_or_else(|_| SocketAddr::new(
+                            IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port
+                        ));
+                    let connected = TcpStream::connect_timeout(&addr, timeout).is_ok();
                     let latency = if connected { Some(t0.elapsed().as_secs_f64() * 1000.0) } else { None };
 
                     if connected {
-                        *open_count.lock().unwrap() += 1;
+                        open_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
 
-                    let _ = tx.send(ScanMsg::Result(ScanResult {
-                        host,
-                        port,
-                        open: connected,
-                        latency_ms: latency,
+                    if tx.send(ScanMsg::Result(ScanResult {
+                        host, port, open: connected, latency_ms: latency,
                         service: service_name(port),
-                    }));
+                    })).is_err() { break; } // receiver gone
                 }
             }));
         }
 
         for h in handles { let _ = h.join(); }
 
-        let open = *open_count.lock().unwrap();
+        let open = open_count.load(std::sync::atomic::Ordering::Relaxed);
         let _ = tx.send(ScanMsg::Done {
-            total,
-            open,
+            total, open,
             elapsed_ms: start.elapsed().as_millis(),
         });
     });

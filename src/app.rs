@@ -278,25 +278,28 @@ impl App {
         } else { 0.0 };
         push(&mut self.mem_history, mem_pct);
 
-        let (rx, tx) = self.networks.iter()
-            .fold((0u64, 0u64), |(ar, at), (_, n)| {
-                (ar + n.total_received(), at + n.total_transmitted())
-            });
-        self.net_rx_rate = rx.saturating_sub(self.prev_rx) as f64;
-        self.net_tx_rate = tx.saturating_sub(self.prev_tx) as f64;
-        self.prev_rx = rx; self.prev_tx = tx;
-        push(&mut self.net_rx_history, self.net_rx_rate);
-        push(&mut self.net_tx_history, self.net_tx_rate);
+        // Only update net/disk history when those tabs are active
+        if need_net_disk {
+            let (rx, tx) = self.networks.iter()
+                .fold((0u64, 0u64), |(ar, at), (_, n)| {
+                    (ar + n.total_received(), at + n.total_transmitted())
+                });
+            self.net_rx_rate = rx.saturating_sub(self.prev_rx) as f64;
+            self.net_tx_rate = tx.saturating_sub(self.prev_tx) as f64;
+            self.prev_rx = rx; self.prev_tx = tx;
+            push(&mut self.net_rx_history, self.net_rx_rate);
+            push(&mut self.net_tx_history, self.net_tx_rate);
 
-        let (dr, dw) = self.disks.iter()
-            .fold((0u64, 0u64), |(ar, aw), d| {
-                (ar + d.usage().total_read_bytes, aw + d.usage().total_written_bytes)
-            });
-        self.disk_read_rate  = dr.saturating_sub(self.prev_disk_read) as f64;
-        self.disk_write_rate = dw.saturating_sub(self.prev_disk_write) as f64;
-        self.prev_disk_read = dr; self.prev_disk_write = dw;
-        push(&mut self.disk_read_history, self.disk_read_rate);
-        push(&mut self.disk_write_history, self.disk_write_rate);
+            let (dr, dw) = self.disks.iter()
+                .fold((0u64, 0u64), |(ar, aw), d| {
+                    (ar + d.usage().total_read_bytes, aw + d.usage().total_written_bytes)
+                });
+            self.disk_read_rate  = dr.saturating_sub(self.prev_disk_read) as f64;
+            self.disk_write_rate = dw.saturating_sub(self.prev_disk_write) as f64;
+            self.prev_disk_read = dr; self.prev_disk_write = dw;
+            push(&mut self.disk_read_history, self.disk_read_rate);
+            push(&mut self.disk_write_history, self.disk_write_rate);
+        }
 
         self.processes.clear();
         let filter_lc = self.proc_filter.to_lowercase();
