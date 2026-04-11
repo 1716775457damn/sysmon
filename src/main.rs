@@ -36,9 +36,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
     loop {
         // Drain scan + git results before drawing
-        let scan_updated = app.drain_scan();
-        let git_updated  = app.drain_git();
-        let _ = (scan_updated, git_updated);
+        app.drain_scan();
+        app.drain_git();
 
         terminal.draw(|f| ui::draw(f, &app))?;
 

@@ -66,7 +66,11 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
     let total = oids.len();
 
     let mut author_map: HashMap<String, AuthorStats> = HashMap::new();
+    // Use a named struct-like tuple: (change_count, additions, deletions, author_set)
+    // author_set tracks distinct contributors per file
     let mut file_map: HashMap<String, (usize, usize, usize, std::collections::HashSet<String>)> = HashMap::new();
+    // Track files-per-author directly to avoid O(authors*files) scan later
+    let mut author_files: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     let mut heatmap = [[0usize; 24]; 7];
     let mut activity_map: HashMap<i64, usize> = HashMap::new(); // day_epoch -> count
     let mut first_ts = i64::MAX;
@@ -106,7 +110,7 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
         let day_key = ts / secs_in_day;
         *activity_map.entry(day_key).or_insert(0) += 1;
 
-        // Author stats
+        // Author stats — use entry API to avoid redundant clone
         let entry = author_map.entry(name.clone()).or_insert_with(|| AuthorStats {
             name: name.clone(), ..Default::default()
         });
@@ -160,23 +164,22 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
             None,
         ).ok();
         for (path, (add, del)) in file_delta_map {
-            let e = file_map.entry(path)
+            let e = file_map.entry(path.clone())
                 .or_insert((0, 0, 0, std::collections::HashSet::new()));
             e.0 += 1;
             e.1 += add;
             e.2 += del;
             e.3.insert(name.clone());
+            // Track per-author file set for O(1) files_touched later
+            author_files.entry(name.clone()).or_default().insert(path);
         }
     }
 
-    // Build author list
+    // Build author list — files_touched is O(1) lookup from author_files map
     let mut authors: Vec<AuthorStats> = author_map.into_values().collect();
     authors.sort_by(|a, b| b.commits.cmp(&a.commits));
     for a in &mut authors {
-        // Count files touched per author (approximate via file_map)
-        a.files_touched = file_map.values()
-            .filter(|(_, _, _, auth)| auth.contains(&a.name))
-            .count();
+        a.files_touched = author_files.get(&a.name).map(|s| s.len()).unwrap_or(0);
     }
 
     // Build hot files list

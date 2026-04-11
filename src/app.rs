@@ -174,8 +174,7 @@ impl App {
     }
 
     /// Drain pending scan results from background thread
-    pub fn drain_scan(&mut self) -> bool {
-        let mut got = false;
+    pub fn drain_scan(&mut self) {
         if let Some(ref rx) = self.scan_rx {
             loop {
                 match rx.try_recv() {
@@ -183,7 +182,6 @@ impl App {
                         self.scan_done += 1;
                         if r.open { self.scan_open += 1; }
                         self.scan_results.push(r);
-                        got = true;
                     }
                     Ok(ScanMsg::Done { total, open, elapsed_ms }) => {
                         self.scan_running = false;
@@ -191,13 +189,11 @@ impl App {
                             "扫描完成  共 {} 个端口  开放 {}  耗时 {:.1}s",
                             total, open, elapsed_ms as f64 / 1000.0
                         );
-                        // Sort: open first, then by host+port
                         self.scan_results.sort_by(|a, b| {
                             b.open.cmp(&a.open)
                                 .then(a.host.cmp(&b.host))
                                 .then(a.port.cmp(&b.port))
                         });
-                        got = true;
                         break;
                     }
                     Err(_) => break,
@@ -205,18 +201,15 @@ impl App {
             }
         }
         if !self.scan_running { self.scan_rx = None; }
-        got
     }
 
-    pub fn drain_git(&mut self) -> bool {
-        let mut got = false;
+    pub fn drain_git(&mut self) {
         if let Some(ref rx) = self.git_rx {
             loop {
                 match rx.try_recv() {
                     Ok(GitMsg::Progress { done, total }) => {
                         self.git_progress = (done, total);
                         self.git_status = format!("分析中… {}/{} commits", done, total);
-                        got = true;
                     }
                     Ok(GitMsg::Done(stats)) => {
                         self.git_status = format!(
@@ -225,13 +218,11 @@ impl App {
                         );
                         self.git_stats = Some(stats);
                         self.git_running = false;
-                        got = true;
                         break;
                     }
                     Ok(GitMsg::Error(e)) => {
                         self.git_status = format!("错误: {}", e);
                         self.git_running = false;
-                        got = true;
                         break;
                     }
                     Err(_) => break,
@@ -239,7 +230,6 @@ impl App {
             }
         }
         if !self.git_running { self.git_rx = None; }
-        got
     }
 
     pub fn update(&mut self) {

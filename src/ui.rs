@@ -859,9 +859,11 @@ fn draw_git_hotfiles(f: &mut Frame, stats: &crate::gitanalyzer::GitStats, select
         let sel = if i == selected {
             Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
         } else { Style::default() };
-        // Show tail of path — most informative part for deep paths
-        let path_display = if file.path.len() > 45 {
-            format!("...{}", &file.path[file.path.len() - 42..])
+        // Show tail of path — safe char-boundary truncation for UTF-8
+        let path_display = if file.path.chars().count() > 45 {
+            let tail: String = file.path.chars().rev().take(42).collect::<String>()
+                .chars().rev().collect();
+            format!("...{}", tail)
         } else {
             file.path.clone()
         };
