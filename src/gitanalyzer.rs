@@ -106,7 +106,7 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
         let day_key = ts / secs_in_day;
         *activity_map.entry(day_key).or_insert(0) += 1;
 
-        // Author stats (without diff for speed on large repos)
+        // Author stats
         let entry = author_map.entry(name.clone()).or_insert_with(|| AuthorStats {
             name: name.clone(), ..Default::default()
         });
@@ -127,22 +127,23 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
         entry.additions += stats.insertions();
         entry.deletions  += stats.deletions();
 
-        // Per-file stats via delta iteration (single closure)
-        let mut file_deltas: Vec<(String, usize, usize)> = Vec::new();
+        // Per-file stats: two passes over diff — HashMap gives O(1) lookup vs old O(n) Vec::find
+        let mut file_delta_map: HashMap<String, (usize, usize)> = HashMap::new();
+        // Pass 1: collect file paths
         diff.foreach(
             &mut |delta, _| {
                 if let Some(path) = delta.new_file().path()
                     .or_else(|| delta.old_file().path())
                     .and_then(|p| p.to_str())
                 {
-                    file_deltas.push((path.to_string(), 0, 0));
+                    file_delta_map.entry(path.to_string()).or_insert((0, 0));
                 }
                 true
             },
             None, None, None,
         ).ok();
-        // Count hunk lines per file using stats per-file
-        let _ = diff.foreach(
+        // Pass 2: accumulate hunk line counts (separate borrow to satisfy borrow checker)
+        diff.foreach(
             &mut |_, _| true,
             None,
             Some(&mut |delta, hunk| {
@@ -150,15 +151,15 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
                     .or_else(|| delta.old_file().path())
                     .and_then(|p| p.to_str())
                     .unwrap_or("");
-                if let Some(fd) = file_deltas.iter_mut().find(|(p, _, _)| p == path) {
-                    fd.1 += hunk.new_lines() as usize;
-                    fd.2 += hunk.old_lines() as usize;
+                if let Some(fd) = file_delta_map.get_mut(path) {
+                    fd.0 += hunk.new_lines() as usize;
+                    fd.1 += hunk.old_lines() as usize;
                 }
                 true
             }),
             None,
         ).ok();
-        for (path, add, del) in file_deltas {
+        for (path, (add, del)) in file_delta_map {
             let e = file_map.entry(path)
                 .or_insert((0, 0, 0, std::collections::HashSet::new()));
             e.0 += 1;
@@ -196,14 +197,25 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
 
     let fmt_ts = |ts: i64| -> String {
         if ts == i64::MAX || ts == i64::MIN { return "-".to_string(); }
-        let d = ts / 86400;
-        // Simple date from epoch
-        let days_since_epoch = d;
-        // Use chrono-free approximation
-        let year = 1970 + days_since_epoch / 365;
-        let month = (days_since_epoch % 365) / 30 + 1;
-        let day   = (days_since_epoch % 365) % 30 + 1;
-        format!("{}-{:02}-{:02}", year, month, day)
+        // Correct Gregorian date from Unix timestamp (no chrono dependency)
+        let mut days = ts / 86400;
+        // Shift epoch: 1970-01-01 = day 0
+        let mut year = 1970i64;
+        loop {
+            let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 366 } else { 365 };
+            if days < days_in_year { break; }
+            days -= days_in_year;
+            year += 1;
+        }
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let month_days = [31i64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut month = 1i64;
+        for &md in &month_days {
+            if days < md { break; }
+            days -= md;
+            month += 1;
+        }
+        format!("{}-{:02}-{:02}", year, month, days + 1)
     };
 
     Ok(GitStats {

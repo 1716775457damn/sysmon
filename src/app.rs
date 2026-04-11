@@ -326,11 +326,9 @@ impl App {
         }
         self.proc_selected = self.proc_selected.min(self.processes.len().saturating_sub(1));
 
-        // Threshold alerts
+        // Threshold alerts — reuse mem_pct already computed above
         let cpu_pct = *self.cpu_total_history.back().unwrap_or(&0.0);
-        let mem_pct = if self.mem_total > 0 {
-            self.mem_used as f64 / self.mem_total as f64 * 100.0
-        } else { 0.0 };
+        let mem_pct = *self.mem_history.back().unwrap_or(&0.0);
         let was_cpu = self.alert_cpu;
         let was_mem = self.alert_mem;
         self.alert_cpu = cpu_pct >= 90.0;
@@ -414,32 +412,37 @@ impl App {
 
     /// Tab-complete git_path: find first matching subdirectory
     pub fn git_path_complete(&mut self) {
-        let path = std::path::Path::new(&self.git_path);
-        let (dir, prefix) = if self.git_path.ends_with(std::path::MAIN_SEPARATOR)
-            || self.git_path.ends_with('/') {
-            (path, "")
-        } else {
-            let parent = path.parent().unwrap_or(std::path::Path::new("."));
-            let stem = path.file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            (parent, stem)
+        // Determine (search_dir, prefix) without borrowing self.git_path across the mutation
+        let (dir_str, prefix_lc) = {
+            let p = &self.git_path;
+            if p.ends_with(std::path::MAIN_SEPARATOR) || p.ends_with('/') {
+                (p.clone(), String::new())
+            } else {
+                let path = std::path::Path::new(p);
+                let parent = path.parent()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| ".".to_string());
+                let stem = path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                (parent, stem)
+            }
         };
-        if let Ok(rd) = std::fs::read_dir(dir) {
+        if let Ok(rd) = std::fs::read_dir(&dir_str) {
             let mut matches: Vec<String> = rd
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
                 .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| n.to_lowercase().starts_with(&prefix.to_lowercase()))
+                .filter(|n| n.to_lowercase().starts_with(&prefix_lc))
                 .collect();
             matches.sort();
             if let Some(first) = matches.first() {
                 let sep = std::path::MAIN_SEPARATOR;
-                let base = dir.to_string_lossy();
-                self.git_path = if base == "." {
+                self.git_path = if dir_str == "." {
                     format!("{}{}", first, sep)
                 } else {
-                    format!("{}{}{}{}", base, sep, first, sep)
+                    format!("{}{}{}{}", dir_str, sep, first, sep)
                 };
             }
         }

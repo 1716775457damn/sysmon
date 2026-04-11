@@ -288,16 +288,14 @@ fn draw_network(f: &mut Frame, app: &App, area: Rect) {
                          Span::raw(fmt_bytes((max_net * 1024.0) as u64))]));
     f.render_widget(net_chart, chunks[0]);
 
-    // Per-interface bar chart
-    let iface_data: Vec<(&str, u64)> = app.networks.iter()
-        .map(|(name, n)| (name.as_str(), n.received() + n.transmitted()))
+    // Per-interface bar chart — build bar_data directly, skip intermediate Vec
+    let bar_data: Vec<(String, u64)> = app.networks.iter()
+        .map(|(name, n)| (name.clone(), (n.received() + n.transmitted()) / 1024))
         .collect();
-    let bar_data: Vec<(&str, u64)> = iface_data.iter()
-        .map(|(n, v)| (*n, *v / 1024))
-        .collect();
+    let bar_refs: Vec<(&str, u64)> = bar_data.iter().map(|(n, v)| (n.as_str(), *v)).collect();
     let bar = BarChart::default()
         .block(Block::default().borders(Borders::ALL).title(" 接口流量 (KB/s) "))
-        .data(&bar_data)
+        .data(&bar_refs)
         .bar_width(9)
         .bar_gap(1)
         .bar_style(Style::default().fg(CYAN))
@@ -861,8 +859,14 @@ fn draw_git_hotfiles(f: &mut Frame, stats: &crate::gitanalyzer::GitStats, select
         let sel = if i == selected {
             Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
         } else { Style::default() };
+        // Show tail of path — most informative part for deep paths
+        let path_display = if file.path.len() > 45 {
+            format!("...{}", &file.path[file.path.len() - 42..])
+        } else {
+            file.path.clone()
+        };
         Row::new(vec![
-            Cell::from(file.path.chars().rev().take(45).collect::<String>().chars().rev().collect::<String>()),
+            Cell::from(path_display),
             Cell::from(file.changes.to_string()).style(Style::default().fg(color)),
             Cell::from(format!("+{}", file.additions)).style(Style::default().fg(GREEN)),
             Cell::from(format!("-{}", file.deletions)).style(Style::default().fg(RED)),
