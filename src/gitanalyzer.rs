@@ -48,6 +48,13 @@ pub enum GitMsg {
 
 pub fn analyze(repo_path: String, tx: Sender<GitMsg>) {
     std::thread::spawn(move || {
+        // Normalise NFD paths on macOS so Chinese repo paths display correctly.
+        #[cfg(target_os = "macos")]
+        let repo_path = {
+            use std::ffi::OsStr;
+            use std::os::unix::ffi::OsStrExt;
+            OsStr::from_bytes(repo_path.as_bytes()).to_string_lossy().into_owned()
+        };
         match run_analysis(&repo_path, &tx) {
             Ok(stats) => { let _ = tx.send(GitMsg::Done(Box::new(stats))); }
             Err(e)    => { let _ = tx.send(GitMsg::Error(e.to_string())); }

@@ -423,7 +423,18 @@ impl App {
             let mut matches: Vec<String> = rd
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                .filter_map(|e| e.file_name().into_string().ok())
+                .filter_map(|e| {
+                    let raw = e.file_name();
+                    // Normalise NFD directory names on macOS to NFC for correct display.
+                    #[cfg(target_os = "macos")]
+                    {
+                        use std::os::unix::ffi::OsStrExt;
+                        Some(std::ffi::OsStr::from_bytes(raw.as_encoded_bytes())
+                            .to_string_lossy().into_owned())
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    raw.into_string().ok()
+                })
                 .filter(|n| n.to_lowercase().starts_with(&prefix_lc))
                 .collect();
             matches.sort();
