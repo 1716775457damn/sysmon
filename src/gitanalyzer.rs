@@ -131,31 +131,27 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
         entry.additions += stats.insertions();
         entry.deletions  += stats.deletions();
 
-        // Per-file stats: two passes over diff — HashMap gives O(1) lookup vs old O(n) Vec::find
-        let mut file_delta_map: HashMap<String, (usize, usize)> = HashMap::new();
-        // Pass 1: collect file paths
+        // Per-file stats: single pass — use RefCell to satisfy borrow checker
+        // while sharing file_delta_map across two closures in one foreach call.
+        let file_delta_map: std::cell::RefCell<HashMap<String, (usize, usize)>> =
+            std::cell::RefCell::new(HashMap::new());
         diff.foreach(
-            &mut |delta, _| {
+            &mut |delta, _progress| {
                 if let Some(path) = delta.new_file().path()
                     .or_else(|| delta.old_file().path())
                     .and_then(|p| p.to_str())
                 {
-                    file_delta_map.entry(path.to_string()).or_insert((0, 0));
+                    file_delta_map.borrow_mut().entry(path.to_string()).or_insert((0, 0));
                 }
                 true
             },
-            None, None, None,
-        ).ok();
-        // Pass 2: accumulate hunk line counts (separate borrow to satisfy borrow checker)
-        diff.foreach(
-            &mut |_, _| true,
             None,
             Some(&mut |delta, hunk| {
                 let path = delta.new_file().path()
                     .or_else(|| delta.old_file().path())
                     .and_then(|p| p.to_str())
                     .unwrap_or("");
-                if let Some(fd) = file_delta_map.get_mut(path) {
+                if let Some(fd) = file_delta_map.borrow_mut().get_mut(path) {
                     fd.0 += hunk.new_lines() as usize;
                     fd.1 += hunk.old_lines() as usize;
                 }
@@ -163,7 +159,7 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
             }),
             None,
         ).ok();
-        for (path, (add, del)) in file_delta_map {
+        for (path, (add, del)) in file_delta_map.into_inner() {
             let e = file_map.entry(path.clone())
                 .or_insert((0, 0, 0, std::collections::HashSet::new()));
             e.0 += 1;
@@ -200,25 +196,19 @@ fn run_analysis(repo_path: &str, tx: &Sender<GitMsg>) -> Result<GitStats, git2::
 
     let fmt_ts = |ts: i64| -> String {
         if ts == i64::MAX || ts == i64::MIN { return "-".to_string(); }
-        // Correct Gregorian date from Unix timestamp (no chrono dependency)
-        let mut days = ts / 86400;
-        // Shift epoch: 1970-01-01 = day 0
-        let mut year = 1970i64;
-        loop {
-            let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 366 } else { 365 };
-            if days < days_in_year { break; }
-            days -= days_in_year;
-            year += 1;
-        }
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let month_days = [31i64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        let mut month = 1i64;
-        for &md in &month_days {
-            if days < md { break; }
-            days -= md;
-            month += 1;
-        }
-        format!("{}-{:02}-{:02}", year, month, days + 1)
+        // O(1) Gregorian date from Unix timestamp — no loop over years
+        // Algorithm: civil_from_days (Howard Hinnant)
+        let z = ts / 86400 + 719468;
+        let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+        let doe = z - era * 146097;                          // day of era [0, 146096]
+        let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365; // year of era [0, 399]
+        let y = yoe + era * 400;
+        let doy = doe - (365*yoe + yoe/4 - yoe/100);        // day of year [0, 365]
+        let mp  = (5*doy + 2) / 153;                         // month prime [0, 11]
+        let d   = doy - (153*mp + 2)/5 + 1;                  // day [1, 31]
+        let m   = if mp < 10 { mp + 3 } else { mp - 9 };    // month [1, 12]
+        let y   = if m <= 2 { y + 1 } else { y };
+        format!("{}-{:02}-{:02}", y, m, d)
     };
 
     Ok(GitStats {

@@ -62,18 +62,21 @@ pub fn parse_hosts(input: &str) -> Vec<String> {
             }
         }
     }
-    // CIDR /24: 192.168.1.0/24
+    // CIDR: 192.168.1.0/24 (supports any prefix length, not just /24)
     if let Some(slash) = input.find('/') {
         let ip_part = &input[..slash];
-        let bits: u8 = input[slash + 1..].parse().unwrap_or(24);
-        if bits == 24 {
-            if let Ok(ip) = ip_part.parse::<IpAddr>() {
-                if let IpAddr::V4(v4) = ip {
-                    let octets = v4.octets();
-                    return (1u8..=254)
-                        .map(|i| format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], i))
-                        .collect();
-                }
+        let bits: u32 = input[slash + 1..].parse().unwrap_or(24);
+        if bits <= 32 {
+            if let Ok(IpAddr::V4(v4)) = ip_part.parse::<IpAddr>() {
+                let base = u32::from(v4) & (!0u32 << (32 - bits));
+                let broadcast = base | (!(!0u32 << (32 - bits)));
+                // Skip network address (base) and broadcast
+                return ((base + 1)..broadcast)
+                    .map(|n| {
+                        let [a, b, c, d] = n.to_be_bytes();
+                        format!("{}.{}.{}.{}", a, b, c, d)
+                    })
+                    .collect();
             }
         }
     }
